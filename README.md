@@ -1,5 +1,5 @@
 # BERT_implement
-使用BERT模型进行文本分类，相似句子判断，以及词性标注
+使用BERT模型进行文本分类，相似句子判断，以及中文命名实体识别（序列标注任务）
 
 ## 说明
 
@@ -84,7 +84,7 @@ python BERT_implement.py \
 1.  批次大小（batch size）对模型的效果影响也比较，如从64下降到16后，模型的准确率下降幅度较大。
 1. fine-tuning模式下略微提高训练轮次（epoch） ，效果可进一步提高。
 
-### 序列标注
+### 命名实体识别（序列标注）
 
 ```python
 export BERT_BASE_DIR=你的模型保存目录
