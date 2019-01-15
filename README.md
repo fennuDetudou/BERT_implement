@@ -109,7 +109,7 @@ python BERT_implement.py \
   --output_dir=$OUTPUT_DIR
 ```
 #### 结果
-![](https://github.com/fennuDetudou/BERT_implement/blob/master/result/屏幕快照%202019-01-15%20上午8.28.56.png?raw=true)
+![](https://github.com/fennuDetudou/BERT_implement/blob/master/result/屏幕快照%202019-01-15%20下午3.10.43.png?raw=true)
 
 ## 在线预测
 
