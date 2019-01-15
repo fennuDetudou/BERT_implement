@@ -79,7 +79,8 @@ python BERT_implement.py \
   --num_train_epochs=3.0 \
   --output_dir=$OUTPUT_DIR
 ```
-
+#### 结果
+![](https://github.com/fennuDetudou/BERT_implement/blob/master/result/屏幕快照%202019-01-15%20上午8.28.56.png?raw=true)
 ### tips:
 
 1. 最大序列长度（max sequence length）对模型的效果影响比较大。随着最大序列长度增加，效果有所提升，但模型的训练时间也相应增加。当最大序列长度变小后（如截取信息），模型的准确率下降
@@ -107,6 +108,8 @@ python BERT_implement.py \
   --learning_rate=2e-5 \
   --output_dir=$OUTPUT_DIR
 ```
+#### 结果
+![](https://github.com/fennuDetudou/BERT_implement/blob/master/result/屏幕快照%202019-01-15%20上午8.28.56.png?raw=true)
 
 ## 在线预测
 
