@@ -25,6 +25,7 @@ import modeling
 import optimization
 import tokenization
 import tensorflow as tf
+import tf_metrics
 
 flags = tf.flags
 
@@ -165,13 +166,13 @@ class InputFeatures(object):
                  input_ids,
                  input_mask,
                  segment_ids,
-                 label_id,
-                 is_real_example=True):
+                 label_id,):
+
         self.input_ids = input_ids
         self.input_mask = input_mask
         self.segment_ids = segment_ids
         self.label_id = label_id
-        self.is_real_example = is_real_example
+        # self.is_real_example = is_real_example
 
 
 class DataProcessor(object):
@@ -372,12 +373,6 @@ class Ner_processor(DataProcessor):
     文件格式：txt
     数据格式：字 标注
     '''
-
-    def __init__(self):
-        self.labels = set()
-        self.labels.add("[CLS]")
-        self.labels.add("[SEP]")
-
     def get_train_examples(self, data_dir):
         return self._create_example(
             self._read_data(os.path.join(data_dir, "train.txt")), "train"
@@ -401,7 +396,6 @@ class Ner_processor(DataProcessor):
             guid = "%s-%s" % (set_type, i)
             text = tokenization.convert_to_unicode(line[1])
             label = tokenization.convert_to_unicode(line[0])
-            self.labels.add(label)
             examples.append(InputExample(guid=guid, text_a=text, label=label))
         return examples
 
@@ -438,66 +432,61 @@ def convert_single_example(ex_index, example, label_list, max_seq_length,
                     labels.append(label_1)
                 else:  # 一般不会出现else
                     labels.append("X")
-            # 序列截断
-            if len(tokens) >= max_seq_length - 1:
-                tokens = tokens[0:(max_seq_length - 2)]  # -2 的原因是因为序列需要加一个句首和句尾标志
-                labels = labels[0:(max_seq_length - 2)]
+        # 序列截断
+        if len(tokens) >= max_seq_length - 1:
+            tokens = tokens[0:(max_seq_length - 2)]  # -2 的原因是因为序列需要加一个句首和句尾标志
+            labels = labels[0:(max_seq_length - 2)]
 
-            ntokens = []
-            segment_ids = []
-            label_ids = []
-            ntokens.append("[CLS]")  # 句子开始设置CLS 标志
+        ntokens = []
+        segment_ids = []
+        label_ids = []
+        ntokens.append("[CLS]")  # 句子开始设置CLS 标志
+        segment_ids.append(0)
+        # append("O") or append("[CLS]") not sure!
+        label_ids.append(label_map["[CLS]"])  # O OR CLS 没有任何影响，不过我觉得O 会减少标签个数,不过句首和句尾使用不同的标志来标注，使用CLS也没毛病
+        for i, token in enumerate(tokens):
+            ntokens.append(token)
             segment_ids.append(0)
-            # append("O") or append("[CLS]") not sure!
-            label_ids.append(label_map["[CLS]"])  # O OR CLS 没有任何影响，不过我觉得O 会减少标签个数,不过拒收和句尾使用不同的标志来标注，使用LCS 也没毛病
-            for i, token in enumerate(tokens):
-                ntokens.append(token)
-                segment_ids.append(0)
-                label_ids.append(label_map[labels[i]])
-            ntokens.append("[SEP]")  # 句尾添加[SEP] 标志
+            label_ids.append(label_map[labels[i]])
+        ntokens.append("[SEP]")  # 句尾添加[SEP] 标志
+        segment_ids.append(0)
+        # append("O") or append("[SEP]") not sure!
+        label_ids.append(label_map["[SEP]"])
+        input_ids = tokenizer.convert_tokens_to_ids(ntokens)  # 将序列中的字(ntokens)转化为ID形式
+        input_mask = [1] * len(input_ids)
+        # padding
+        while len(input_ids) < max_seq_length:
+            input_ids.append(0)
+            input_mask.append(0)
             segment_ids.append(0)
-            # append("O") or append("[SEP]") not sure!
-            label_ids.append(label_map["[SEP]"])
-            input_ids = tokenizer.convert_tokens_to_ids(ntokens)  # 将序列中的字(ntokens)转化为ID形式
-            input_mask = [1] * len(input_ids)
+            # we don't concerned about it!
+            label_ids.append(0)
+            ntokens.append("**NULL**")
 
-            # padding, 使用
-            while len(input_ids) < max_seq_length:
-                input_ids.append(0)
-                input_mask.append(0)
-                segment_ids.append(0)
-                # we don't concerned about it!
-                label_ids.append(0)
-                ntokens.append("**NULL**")
+        assert len(input_ids) == max_seq_length
+        assert len(input_mask) == max_seq_length
+        assert len(segment_ids) == max_seq_length
+        assert len(label_ids) == max_seq_length
 
-            assert len(input_ids) == max_seq_length
-            assert len(input_mask) == max_seq_length
-            assert len(segment_ids) == max_seq_length
-            assert len(label_ids) == max_seq_length
-            # assert len(label_mask) == max_seq_length
+        # 打印部分样本数据信息
+        if ex_index < 5:
+            tf.logging.info("*** Example ***")
+            tf.logging.info("guid: %s" % (example.guid))
+            tf.logging.info("tokens: %s" % " ".join(
+                [tokenization.printable_text(x) for x in tokens]))
+            tf.logging.info("input_ids: %s" % " ".join([str(x) for x in input_ids]))
+            tf.logging.info("input_mask: %s" % " ".join([str(x) for x in input_mask]))
+            tf.logging.info("segment_ids: %s" % " ".join([str(x) for x in segment_ids]))
+            tf.logging.info("label_ids: %s" % " ".join([str(x) for x in label_ids]))
+        # 结构化为一个类
+        feature = InputFeatures(
+            input_ids=input_ids,
+            input_mask=input_mask,
+            segment_ids=segment_ids,
+            label_id=label_ids,
+        )
 
-            # 打印部分样本数据信息
-            if ex_index < 5:
-                tf.logging.info("*** Example ***")
-                tf.logging.info("guid: %s" % (example.guid))
-                tf.logging.info("tokens: %s" % " ".join(
-                    [tokenization.printable_text(x) for x in tokens]))
-                tf.logging.info("input_ids: %s" % " ".join([str(x) for x in input_ids]))
-                tf.logging.info("input_mask: %s" % " ".join([str(x) for x in input_mask]))
-                tf.logging.info("segment_ids: %s" % " ".join([str(x) for x in segment_ids]))
-                tf.logging.info("label_ids: %s" % " ".join([str(x) for x in label_ids]))
-                # tf.logging.info("label_mask: %s" % " ".join([str(x) for x in label_mask]))
-
-            # 结构化为一个类
-            feature = InputFeatures(
-                input_ids=input_ids,
-                input_mask=input_mask,
-                segment_ids=segment_ids,
-                label_id=label_ids,
-                # label_mask = label_mask
-            )
-
-            return feature
+        return feature
 
     else:
         for (i, label) in enumerate(label_list):
@@ -585,7 +574,6 @@ def convert_single_example(ex_index, example, label_list, max_seq_length,
             input_mask=input_mask,
             segment_ids=segment_ids,
             label_id=label_id,
-            # is_real_example=True
         )
         return feature
 
@@ -615,8 +603,8 @@ def file_based_convert_examples_to_features(
             features["label_ids"] = create_int_feature(feature.label_id)
         else:
             features["label_ids"] = create_int_feature([feature.label_id])
-        features["is_real_example"] = create_int_feature(
-            [int(feature.is_real_example)])
+        # features["is_real_example"] = create_int_feature(
+        #     [int(feature.is_real_example)])
 
         tf_example = tf.train.Example(features=tf.train.Features(feature=features))
         writer.write(tf_example.SerializeToString())
@@ -626,14 +614,21 @@ def file_based_convert_examples_to_features(
 def file_based_input_fn_builder(input_file, seq_length, is_training,
                                 drop_remainder):
     """Creates an `input_fn` closure to be passed to TPUEstimator."""
-
-    name_to_features = {
-        "input_ids": tf.FixedLenFeature([seq_length], tf.int64),
-        "input_mask": tf.FixedLenFeature([seq_length], tf.int64),
-        "segment_ids": tf.FixedLenFeature([seq_length], tf.int64),
-        "label_ids": tf.FixedLenFeature([], tf.int64),
-        "is_real_example": tf.FixedLenFeature([], tf.int64),
-    }
+    if FLAGS.task_name.lower() == 'ner':
+        name_to_features = {
+            "input_ids": tf.FixedLenFeature([seq_length], tf.int64),
+            "input_mask": tf.FixedLenFeature([seq_length], tf.int64),
+            "segment_ids": tf.FixedLenFeature([seq_length], tf.int64),
+            "label_ids": tf.FixedLenFeature([seq_length], tf.int64),
+        }
+    else:
+        name_to_features = {
+            "input_ids": tf.FixedLenFeature([seq_length], tf.int64),
+            "input_mask": tf.FixedLenFeature([seq_length], tf.int64),
+            "segment_ids": tf.FixedLenFeature([seq_length], tf.int64),
+            "label_ids": tf.FixedLenFeature([], tf.int64),
+            # "is_real_example": tf.FixedLenFeature([], tf.int64),
+        }
 
     def _decode_record(record, name_to_features):
         """Decodes a record to a TensorFlow example."""
@@ -652,7 +647,6 @@ def file_based_input_fn_builder(input_file, seq_length, is_training,
     def input_fn(params):
         """The actual input function."""
         batch_size = params["batch_size"]
-
         # For training, we want a lot of parallel reading and shuffling.
         # For eval, we want no shuffling and parallel reading doesn't matter.
         d = tf.data.TFRecordDataset(input_file)
@@ -690,7 +684,6 @@ def _truncate_seq_pair(tokens_a, tokens_b, max_length):
 
 def create_model(bert_config, is_training, input_ids, input_mask, segment_ids,
                  labels, num_labels, use_one_hot_embeddings):
-
     # 使用数据加载BertModel,获取对应的字embedding
     model = modeling.BertModel(
         config=bert_config,
@@ -710,6 +703,7 @@ def create_model(bert_config, is_training, input_ids, input_mask, segment_ids,
 
     if FLAGS.task_name.lower() == 'ner':
         # 获取对应的embedding 输入数据[batch_size, seq_length, embedding_size]
+
         output_layer = model.get_sequence_output()
 
         hidden_size = output_layer.shape[-1].value
@@ -724,6 +718,8 @@ def create_model(bert_config, is_training, input_ids, input_mask, segment_ids,
         with tf.variable_scope("loss"):
             if is_training:
                 output_layer = tf.nn.dropout(output_layer, keep_prob=0.9)
+
+            # 将词性标注问题看做是对每个位置的词的分类问题
             output_layer = tf.reshape(output_layer, [-1, hidden_size])
             logits = tf.matmul(output_layer, output_weight, transpose_b=True)
             logits = tf.nn.bias_add(logits, output_bias)
@@ -783,14 +779,14 @@ def model_fn_builder(bert_config, num_labels, init_checkpoint, learning_rate,
         input_mask = features["input_mask"]
         segment_ids = features["segment_ids"]
         label_ids = features["label_ids"]
-        is_real_example = None
-        if "is_real_example" in features:
-            is_real_example = tf.cast(features["is_real_example"], dtype=tf.float32)
-        else:
-            is_real_example = tf.ones(tf.shape(label_ids), dtype=tf.float32)
+        # is_real_example = None
+        # if "is_real_example" in features:
+        #     is_real_example = tf.cast(features["is_real_example"], dtype=tf.float32)
+        # else:
+        #     is_real_example = tf.ones(tf.shape(label_ids), dtype=tf.float32)
 
         is_training = (mode == tf.estimator.ModeKeys.TRAIN)
-
+        # 使用参数构建模型,input_idx 就是输入的样本idx表示，label_ids 就是标签的idx表示
         (total_loss, per_example_loss, logits, probabilities) = create_model(
             bert_config, is_training, input_ids, input_mask, segment_ids, label_ids,
             num_labels, use_one_hot_embeddings)
@@ -798,9 +794,11 @@ def model_fn_builder(bert_config, num_labels, init_checkpoint, learning_rate,
         tvars = tf.trainable_variables()
         initialized_variable_names = {}
         scaffold_fn = None
+        # 加载BERT模型
         if init_checkpoint:
             (assignment_map, initialized_variable_names
              ) = modeling.get_assignment_map_from_checkpoint(tvars, init_checkpoint)
+            tf.train.init_from_checkpoint(init_checkpoint, assignment_map)
             if use_tpu:
 
                 def tpu_scaffold():
@@ -831,6 +829,7 @@ def model_fn_builder(bert_config, num_labels, init_checkpoint, learning_rate,
                 train_op=train_op,
                 scaffold_fn=scaffold_fn)
         elif mode == tf.estimator.ModeKeys.EVAL:
+            ### 词性标注问题评价函数设计
             if FLAGS.task_name.lower() == 'ner':
                 def metric_fn(per_example_loss, label_ids, logits):
                     predictions = tf.argmax(logits, axis=-1, output_type=tf.int32)
@@ -850,18 +849,18 @@ def model_fn_builder(bert_config, num_labels, init_checkpoint, learning_rate,
                     eval_metrics=eval_metrics,
                     scaffold_fn=scaffold_fn)
             else:
-                def metric_fn(per_example_loss, label_ids, logits, is_real_example):
+                def metric_fn(per_example_loss, label_ids, logits):
                     predictions = tf.argmax(logits, axis=-1, output_type=tf.int32)
                     accuracy = tf.metrics.accuracy(
-                        labels=label_ids, predictions=predictions, weights=is_real_example)
-                    loss = tf.metrics.mean(values=per_example_loss, weights=is_real_example)
+                        labels=label_ids, predictions=predictions)
+                    loss = tf.metrics.mean(values=per_example_loss)
                     return {
                         "eval_accuracy": accuracy,
                         "eval_loss": loss,
                     }
 
                 eval_metrics = (metric_fn,
-                                [per_example_loss, label_ids, logits, is_real_example])
+                                [per_example_loss, label_ids, logits])
                 output_spec = tf.contrib.tpu.TPUEstimatorSpec(
                     mode=mode,
                     loss=total_loss,
@@ -1014,16 +1013,28 @@ def main(_):
         num_train_steps = int(
             len(train_examples) / FLAGS.train_batch_size * FLAGS.num_train_epochs)
         num_warmup_steps = int(num_train_steps * FLAGS.warmup_proportion)
+    ### 对于词性标注问题，注意num_label的值
+    if FLAGS.task_name.lower() == 'ner':
+        model_fn = model_fn_builder(
+            bert_config=bert_config,
+            num_labels=len(label_list) + 1,
+            init_checkpoint=FLAGS.init_checkpoint,
+            learning_rate=FLAGS.learning_rate,
+            num_train_steps=num_train_steps,
+            num_warmup_steps=num_warmup_steps,
+            use_tpu=FLAGS.use_tpu,
+            use_one_hot_embeddings=FLAGS.use_tpu)
 
-    model_fn = model_fn_builder(
-        bert_config=bert_config,
-        num_labels=len(label_list),
-        init_checkpoint=FLAGS.init_checkpoint,
-        learning_rate=FLAGS.learning_rate,
-        num_train_steps=num_train_steps,
-        num_warmup_steps=num_warmup_steps,
-        use_tpu=FLAGS.use_tpu,
-        use_one_hot_embeddings=FLAGS.use_tpu)
+    else:
+        model_fn = model_fn_builder(
+            bert_config=bert_config,
+            num_labels=len(label_list),
+            init_checkpoint=FLAGS.init_checkpoint,
+            learning_rate=FLAGS.learning_rate,
+            num_train_steps=num_train_steps,
+            num_warmup_steps=num_warmup_steps,
+            use_tpu=FLAGS.use_tpu,
+            use_one_hot_embeddings=FLAGS.use_tpu)
 
     # If TPU is not available, this will fall back to normal Estimator on CPU
     # or GPU.
@@ -1052,7 +1063,7 @@ def main(_):
 
     if FLAGS.do_eval:
         eval_examples = processor.get_dev_examples(FLAGS.data_dir)
-        num_actual_eval_examples = len(eval_examples)
+
         if FLAGS.use_tpu:
             # TPU requires a fixed batch size for all batches, therefore the number
             # of examples must be a multiple of the batch size, or else examples
@@ -1065,12 +1076,17 @@ def main(_):
         eval_file = os.path.join(FLAGS.output_dir, "eval.tf_record")
         file_based_convert_examples_to_features(
             eval_examples, label_list, FLAGS.max_seq_length, tokenizer, eval_file)
-
-        tf.logging.info("***** Running evaluation *****")
-        tf.logging.info("  Num examples = %d (%d actual, %d padding)",
-                        len(eval_examples), num_actual_eval_examples,
-                        len(eval_examples) - num_actual_eval_examples)
-        tf.logging.info("  Batch size = %d", FLAGS.eval_batch_size)
+        if FLAGS.task_name.lower() == 'ner':
+            tf.logging.info("***** Running evaluation *****")
+            tf.logging.info("  Num examples = %d", len(eval_examples))
+            tf.logging.info("  Batch size = %d", FLAGS.eval_batch_size)
+        else:
+            num_actual_eval_examples = len(eval_examples)
+            tf.logging.info("***** Running evaluation *****")
+            tf.logging.info("  Num examples = %d (%d actual, %d padding)",
+                            len(eval_examples), num_actual_eval_examples,
+                            len(eval_examples) - num_actual_eval_examples)
+            tf.logging.info("  Batch size = %d", FLAGS.eval_batch_size)
 
         # This tells the estimator to run through the entire set.
         eval_steps = None
