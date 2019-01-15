@@ -55,7 +55,7 @@ python BERT_implement.py \
   --output_dir=$OUTPUT_DIR
 ```
 #### 结果
-!()[https://github.com/fennuDetudou/BERT_implement/blob/master/result/屏幕快照%202019-01-14%20上午7.47.40.png?raw=true]
+![](https://github.com/fennuDetudou/BERT_implement/blob/master/result/屏幕快照%202019-01-14%20上午7.47.40.png?raw=true)
 
 ### 句子配对
 
