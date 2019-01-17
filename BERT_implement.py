@@ -18,9 +18,12 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
+import codecs
+import pickle
 import collections
 import csv
 import os
+
 import modeling
 import optimization
 import tokenization
@@ -166,8 +169,7 @@ class InputFeatures(object):
                  input_ids,
                  input_mask,
                  segment_ids,
-                 label_id,):
-
+                 label_id, ):
         self.input_ids = input_ids
         self.input_mask = input_mask
         self.segment_ids = segment_ids
@@ -360,7 +362,7 @@ class classify_text(DataProcessor):
             guid = "%s-%s" % (set_type, i)
             text_a = tokenization.convert_to_unicode(line[1])
             label = tokenization.convert_to_unicode(line[0])
-            self.labels.add(label)
+            print(label)
             examples.append(
                 InputExample(guid=guid, text_a=text_a, text_b=None, label=label))
 
@@ -373,6 +375,7 @@ class Ner_processor(DataProcessor):
     文件格式：txt
     数据格式：字 标注
     '''
+
     def get_train_examples(self, data_dir):
         return self._create_example(
             self._read_data(os.path.join(data_dir, "train.txt")), "train"
@@ -400,8 +403,27 @@ class Ner_processor(DataProcessor):
         return examples
 
 
+def write_tokens(tokens, mode):
+    """
+    将序列解析结果写入到文件中
+    只在mode=test的时候启用
+    :param tokens:
+    :param mode:
+    :return:
+    """
+    if mode == "test":
+        path = os.path.join(FLAGS.output_dir, "token_" + mode + ".txt")
+        wf = codecs.open(path, 'a', encoding='utf-8')
+        for token in tokens:
+            if token != "**NULL**":
+                wf.write(token + '\n')
+        wf.close()
+
+
 def convert_single_example(ex_index, example, label_list, max_seq_length,
-                           tokenizer):
+                           tokenizer,
+                           # 序列标注任务write_tokens才有用
+                           mode=None):
     """Converts a single `InputExample` into a single `InputFeatures`."""
 
     # if isinstance(example, PaddingInputExample):
@@ -411,12 +433,17 @@ def convert_single_example(ex_index, example, label_list, max_seq_length,
     #         segment_ids=[0] * max_seq_length,
     #         label_id=0,
     #         is_real_example=False)
-
     label_map = {}
     ### 序列标注问题数据解析方式
+
     if FLAGS.task_name.lower() == 'ner':
         for (i, label) in enumerate(label_list, 1):
             label_map[label] = i
+
+        # 保存label->index 的map
+        if not os.path.exists(os.path.join(FLAGS.output_dir, 'label2id.pkl')):
+            with codecs.open(os.path.join(FLAGS.output_dir, 'label2id.pkl'), 'wb') as w:
+                pickle.dump(label_map, w)
 
         textlist = example.text_a.split(' ')
         labellist = example.label.split(' ')
@@ -486,6 +513,7 @@ def convert_single_example(ex_index, example, label_list, max_seq_length,
             label_id=label_ids,
         )
 
+        write_tokens(ntokens, mode)
         return feature
 
     else:
@@ -575,11 +603,13 @@ def convert_single_example(ex_index, example, label_list, max_seq_length,
             segment_ids=segment_ids,
             label_id=label_id,
         )
+
         return feature
 
 
 def file_based_convert_examples_to_features(
-        examples, label_list, max_seq_length, tokenizer, output_file):
+        examples, label_list, max_seq_length, tokenizer, output_file,
+        mode=None):
     """Convert a set of `InputExample`s to a TFRecord file."""
 
     writer = tf.python_io.TFRecordWriter(output_file)
@@ -589,7 +619,7 @@ def file_based_convert_examples_to_features(
             tf.logging.info("Writing example %d of %d" % (ex_index, len(examples)))
 
         feature = convert_single_example(ex_index, example, label_list,
-                                         max_seq_length, tokenizer)
+                                         max_seq_length, tokenizer, mode)
 
         def create_int_feature(values):
             f = tf.train.Feature(int64_list=tf.train.Int64List(value=list(values)))
@@ -787,9 +817,14 @@ def model_fn_builder(bert_config, num_labels, init_checkpoint, learning_rate,
 
         is_training = (mode == tf.estimator.ModeKeys.TRAIN)
         # 使用参数构建模型,input_idx 就是输入的样本idx表示，label_ids 就是标签的idx表示
-        (total_loss, per_example_loss, logits, probabilities) = create_model(
-            bert_config, is_training, input_ids, input_mask, segment_ids, label_ids,
-            num_labels, use_one_hot_embeddings)
+        if FLAGS.task_name.lower() == 'ner':
+            (total_loss, per_example_loss, logits, predicts) = create_model(
+                bert_config, is_training, input_ids, input_mask, segment_ids, label_ids,
+                num_labels, use_one_hot_embeddings)
+        else:
+            (total_loss, per_example_loss, logits, probabilities) = create_model(
+                bert_config, is_training, input_ids, input_mask, segment_ids, label_ids,
+                num_labels, use_one_hot_embeddings)
 
         tvars = tf.trainable_variables()
         initialized_variable_names = {}
@@ -809,6 +844,7 @@ def model_fn_builder(bert_config, num_labels, init_checkpoint, learning_rate,
             else:
                 tf.train.init_from_checkpoint(init_checkpoint, assignment_map)
 
+        # 加载的模型参数
         tf.logging.info("**** Trainable Variables ****")
         for var in tvars:
             init_string = ""
@@ -867,10 +903,15 @@ def model_fn_builder(bert_config, num_labels, init_checkpoint, learning_rate,
                     eval_metrics=eval_metrics,
                     scaffold_fn=scaffold_fn)
         else:
-            output_spec = tf.contrib.tpu.TPUEstimatorSpec(
-                mode=mode,
-                predictions={"probabilities": probabilities},
-                scaffold_fn=scaffold_fn)
+            if FLAGS.task_name.lower() == 'ner':
+                output_spec = tf.contrib.tpu.TPUEstimatorSpec(
+                    mode=mode, predictions=predicts, scaffold_fn=scaffold_fn
+                )
+            else:
+                output_spec = tf.contrib.tpu.TPUEstimatorSpec(
+                    mode=mode,
+                    predictions={"probabilities": probabilities},
+                    scaffold_fn=scaffold_fn)
         return output_spec
 
     return model_fn
@@ -1008,6 +1049,7 @@ def main(_):
     train_examples = None
     num_train_steps = None
     num_warmup_steps = None
+
     if FLAGS.do_train:
         train_examples = processor.get_train_examples(FLAGS.data_dir)
         num_train_steps = int(
@@ -1113,51 +1155,86 @@ def main(_):
                 writer.write("%s = %s\n" % (key, str(result[key])))
 
     if FLAGS.do_predict:
-        predict_examples = processor.get_test_examples(FLAGS.data_dir)
-        num_actual_predict_examples = len(predict_examples)
-        if FLAGS.use_tpu:
-            # TPU requires a fixed batch size for all batches, therefore the number
-            # of examples must be a multiple of the batch size, or else examples
-            # will get dropped. So we pad with fake examples which are ignored
-            # later on.
-            while len(predict_examples) % FLAGS.predict_batch_size != 0:
-                predict_examples.append(PaddingInputExample())
+        if FLAGS.task_name.lower() == 'ner':
+            token_path = os.path.join(FLAGS.output_dir, "token_test.txt")
+            with open('./output/label2id.pkl', 'rb') as rf:
+                label2id = pickle.load(rf)
+                id2label = {value: key for key, value in label2id.items()}
+            if os.path.exists(token_path):
+                os.remove(token_path)
 
-        predict_file = os.path.join(FLAGS.output_dir, "predict.tf_record")
-        file_based_convert_examples_to_features(predict_examples, label_list,
-                                                FLAGS.max_seq_length, tokenizer,
-                                                predict_file)
+            predict_examples = processor.get_test_examples(FLAGS.data_dir)
+            predict_file = os.path.join(FLAGS.output_dir, "predict.tf_record")
+            file_based_convert_examples_to_features(predict_examples, label_list,
+                                                     FLAGS.max_seq_length, tokenizer,
+                                                     predict_file, mode="test")
 
-        tf.logging.info("***** Running prediction*****")
-        tf.logging.info("  Num examples = %d (%d actual, %d padding)",
-                        len(predict_examples), num_actual_predict_examples,
-                        len(predict_examples) - num_actual_predict_examples)
-        tf.logging.info("  Batch size = %d", FLAGS.predict_batch_size)
+            tf.logging.info("***** Running prediction*****")
+            tf.logging.info("  Num examples = %d", len(predict_examples))
+            tf.logging.info("  Batch size = %d", FLAGS.predict_batch_size)
+            if FLAGS.use_tpu:
+                # Warning: According to tpu_estimator.py Prediction on TPU is an
+                # experimental feature and hence not supported here
+                raise ValueError("Prediction in TPU not supported")
+            predict_drop_remainder = True if FLAGS.use_tpu else False
+            predict_input_fn = file_based_input_fn_builder(
+                input_file=predict_file,
+                seq_length=FLAGS.max_seq_length,
+                is_training=False,
+                drop_remainder=predict_drop_remainder)
 
-        predict_drop_remainder = True if FLAGS.use_tpu else False
-        predict_input_fn = file_based_input_fn_builder(
-            input_file=predict_file,
-            seq_length=FLAGS.max_seq_length,
-            is_training=False,
-            drop_remainder=predict_drop_remainder)
+            result = estimator.predict(input_fn=predict_input_fn)
+            output_predict_file = os.path.join(FLAGS.output_dir, "label_test.txt")
+            with open(output_predict_file, 'w') as writer:
+                for prediction in result:
+                    output_line = "\n".join(id2label[id] for id in prediction if id != 0) + "\n"
+                    writer.write(output_line)
 
-        result = estimator.predict(input_fn=predict_input_fn)
+        else:
+            predict_examples = processor.get_test_examples(FLAGS.data_dir)
+            num_actual_predict_examples = len(predict_examples)
+            if FLAGS.use_tpu:
+                # TPU requires a fixed batch size for all batches, therefore the number
+                # of examples must be a multiple of the batch size, or else examples
+                # will get dropped. So we pad with fake examples which are ignored
+                # later on.
+                while len(predict_examples) % FLAGS.predict_batch_size != 0:
+                    predict_examples.append(PaddingInputExample())
 
-        output_predict_file = os.path.join(FLAGS.output_dir, "test_results.tsv")
-        with tf.gfile.GFile(output_predict_file, "w") as writer:
-            num_written_lines = 0
-            tf.logging.info("***** Predict results *****")
-            for (i, prediction) in enumerate(result):
-                probabilities = prediction["probabilities"]
-                if i >= num_actual_predict_examples:
-                    break
-                output_line = "\t".join(
-                    str(class_probability)
-                    for class_probability in probabilities) + "\n"
-                writer.write(output_line)
-                num_written_lines += 1
-        assert num_written_lines == num_actual_predict_examples
+            predict_file = os.path.join(FLAGS.output_dir, "predict.tf_record")
+            file_based_convert_examples_to_features(predict_examples, label_list,
+                                                    FLAGS.max_seq_length, tokenizer,
+                                                    predict_file)
 
+            tf.logging.info("***** Running prediction*****")
+            tf.logging.info("  Num examples = %d (%d actual, %d padding)",
+                            len(predict_examples), num_actual_predict_examples,
+                            len(predict_examples) - num_actual_predict_examples)
+            tf.logging.info("  Batch size = %d", FLAGS.predict_batch_size)
+
+            predict_drop_remainder = True if FLAGS.use_tpu else False
+            predict_input_fn = file_based_input_fn_builder(
+                input_file=predict_file,
+                seq_length=FLAGS.max_seq_length,
+                is_training=False,
+                drop_remainder=predict_drop_remainder)
+
+            result = estimator.predict(input_fn=predict_input_fn)
+
+            output_predict_file = os.path.join(FLAGS.output_dir, "test_results.tsv")
+            with tf.gfile.GFile(output_predict_file, "w") as writer:
+                num_written_lines = 0
+                tf.logging.info("***** Predict results *****")
+                for (i, prediction) in enumerate(result):
+                    probabilities = prediction["probabilities"]
+                    if i >= num_actual_predict_examples:
+                        break
+                    output_line = "\t".join(
+                        str(class_probability)
+                        for class_probability in probabilities) + "\n"
+                    writer.write(output_line)
+                    num_written_lines += 1
+            assert num_written_lines == num_actual_predict_examples
 
 if __name__ == "__main__":
     flags.mark_flag_as_required("data_dir")
