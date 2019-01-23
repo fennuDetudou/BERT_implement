@@ -294,6 +294,8 @@ class sentence_pair(DataProcessor):
                 guid = 'dev-%d' % i
                 i += 1
                 split_line = line.strip().split('\t')
+
+                #### 数据清洗
                 if len(split_line) != 4:
                     print(split_line)
                     continue
@@ -308,7 +310,7 @@ class sentence_pair(DataProcessor):
         file_list = []
         for file in os.listdir(data_dir):
             if 'test' in os.path.splitext(file)[0]:
-                file_list = file
+                file_list.append(file)
         file_path = [os.path.join(data_dir, file) for file in file_list]
         i = 0
         example = []
@@ -319,12 +321,9 @@ class sentence_pair(DataProcessor):
                 guid = 'test-%d' % i
                 i += 1
                 split_line = line.strip().split('\t')
-                if len(split_line) != 4:
-                    print(split_line)
-                    continue
                 text_a = tokenization.convert_to_unicode(split_line[1])
                 text_b = tokenization.convert_to_unicode(split_line[2])
-                example.append(InputExample(guid, text_a, text_b))
+                example.append(InputExample(guid=guid,text_a=text_a,text_b=text_b,label="1"))
         return example
 
     def get_labels(self):
@@ -426,13 +425,14 @@ def convert_single_example(ex_index, example, label_list, max_seq_length,
                            mode=None):
     """Converts a single `InputExample` into a single `InputFeatures`."""
 
-    # if isinstance(example, PaddingInputExample):
-    #     return InputFeatures(
-    #         input_ids=[0] * max_seq_length,
-    #         input_mask=[0] * max_seq_length,
-    #         segment_ids=[0] * max_seq_length,
-    #         label_id=0,
-    #         is_real_example=False)
+    if isinstance(example, PaddingInputExample):
+        return InputFeatures(
+            input_ids=[0] * max_seq_length,
+            input_mask=[0] * max_seq_length,
+            segment_ids=[0] * max_seq_length,
+            label_id=0,
+            is_real_example=False)
+
     label_map = {}
     ### 序列标注问题数据解析方式
 
